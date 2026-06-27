@@ -50,12 +50,14 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -64,6 +66,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -126,6 +129,48 @@ data class Project(
     val path: String,
     val createdAt: Long = System.currentTimeMillis()
 )
+
+data class EnvSelection(
+    val name: String,
+    val version: String
+)
+
+data class LangEnvironment(
+    val name: String,
+    val versions: List<String>,
+    val icon: String,
+    val category: String
+)
+
+val allEnvironments = listOf(
+    LangEnvironment("Python", listOf("3.12", "3.11", "3.10", "3.9", "3.8", "2.7"), "🐍", "后端语言"),
+    LangEnvironment("Java", listOf("21", "17", "11", "8"), "☕", "后端语言"),
+    LangEnvironment("Kotlin", listOf("2.0", "1.9", "1.8"), "🅺", "后端语言"),
+    LangEnvironment("Go", listOf("1.22", "1.21", "1.20"), "🔵", "后端语言"),
+    LangEnvironment("Rust", listOf("1.78", "1.77", "1.76"), "🦀", "后端语言"),
+    LangEnvironment("C#", listOf(".NET 8", ".NET 6", "Mono"), "#️⃣", "后端语言"),
+    LangEnvironment("Ruby", listOf("3.3", "3.2", "3.1"), "💎", "后端语言"),
+    LangEnvironment("PHP", listOf("8.3", "8.2", "8.1"), "🐘", "后端语言"),
+    LangEnvironment("Scala", listOf("3.4", "3.3", "2.13"), "🔷", "后端语言"),
+    LangEnvironment("JavaScript (Node.js)", listOf("22", "20", "18", "16"), "🟨", "前端/全栈"),
+    LangEnvironment("TypeScript", listOf("5.4", "5.3", "5.2"), "🟦", "前端/全栈"),
+    LangEnvironment("JavaScript (Deno)", listOf("1.42", "1.40"), "🟦", "前端/全栈"),
+    LangEnvironment("HTML/CSS", listOf("HTML5", "HTML4"), "🌐", "前端/全栈"),
+    LangEnvironment("Vue.js", listOf("3.4", "3.3", "2.7"), "💚", "前端/全栈"),
+    LangEnvironment("React", listOf("18", "17", "16"), "⚛️", "前端/全栈"),
+    LangEnvironment("C++", listOf("C++23", "C++20", "C++17", "C++14", "C++11"), "⚡", "系统/底层"),
+    LangEnvironment("C", listOf("C23", "C17", "C11", "C99"), "🔧", "系统/底层"),
+    LangEnvironment("Android (Kotlin)", listOf("API 34", "API 33", "API 32"), "🤖", "移动开发"),
+    LangEnvironment("Swift", listOf("5.10", "5.9", "5.8"), "🍎", "移动开发"),
+    LangEnvironment("SQL", listOf("SQLite", "PostgreSQL", "MySQL", "SQL Server"), "🗄️", "数据库"),
+    LangEnvironment("Bash/Shell", listOf("Bash 5", "Bash 4", "Zsh"), "⌨️", "脚本/运维"),
+    LangEnvironment("Lua", listOf("5.4", "5.3", "5.2"), "🌙", "脚本/运维"),
+    LangEnvironment("R", listOf("4.4", "4.3", "4.2"), "📊", "数据科学"),
+    LangEnvironment("MATLAB", listOf("R2024a", "R2023b", "R2023a"), "📈", "数据科学"),
+    LangEnvironment("Arduino", listOf("1.8", "1.6"), "🔌", "脚本/嵌入式"),
+)
+
+val categoryOrder = listOf("后端语言", "前端/全栈", "系统/底层", "移动开发", "数据库", "脚本/运维", "数据科学", "脚本/嵌入式")
 
 object FileOps {
     private const val PROJECTS_DIR = "API Tool配置文件"
@@ -221,7 +266,7 @@ object ConfigStorage {
     private fun getInternalFile(context: Context): java.io.File =
         java.io.File(context.filesDir, FILE_NAME)
 
-    private fun toJson(providers: List<ApiProvider>, conversations: List<Conversation>): String =
+    private fun toJson(providers: List<ApiProvider>, conversations: List<Conversation>, envSelections: List<EnvSelection> = emptyList()): String =
         JSONObject().apply {
             put("providers", JSONArray().apply {
                 providers.forEach { p ->
@@ -252,9 +297,17 @@ object ConfigStorage {
                     })
                 }
             })
+            put("envSelections", JSONArray().apply {
+                envSelections.forEach { e ->
+                    put(JSONObject().apply {
+                        put("name", e.name)
+                        put("version", e.version)
+                    })
+                }
+            })
         }.toString(2)
 
-    private fun parseJson(text: String): Pair<List<ApiProvider>, List<Conversation>> {
+    private fun parseJson(text: String): Triple<List<ApiProvider>, List<Conversation>, List<EnvSelection>> {
         val root = JSONObject(text)
         val providers = root.getJSONArray("providers").let { arr ->
             (0 until arr.length()).map { i ->
@@ -285,12 +338,20 @@ object ConfigStorage {
                 )
             }
         }
-        return Pair(providers, conversations)
+        val envSelections = if (root.has("envSelections")) {
+            root.getJSONArray("envSelections").let { arr ->
+                (0 until arr.length()).map { i ->
+                    val obj = arr.getJSONObject(i)
+                    EnvSelection(name = obj.getString("name"), version = obj.getString("version"))
+                }
+            }
+        } else emptyList()
+        return Triple(providers, conversations, envSelections)
     }
 
-    fun save(context: Context, providers: List<ApiProvider>, conversations: List<Conversation>) {
+    fun save(context: Context, providers: List<ApiProvider>, conversations: List<Conversation>, envSelections: List<EnvSelection> = emptyList()) {
         try {
-            val json = toJson(providers, conversations)
+            val json = toJson(providers, conversations, envSelections)
             // Always save to internal storage (no permission needed)
             getInternalFile(context).writeText(json, Charsets.UTF_8)
             // Also try external if permission granted
@@ -303,19 +364,19 @@ object ConfigStorage {
         }
     }
 
-    fun load(context: Context): Pair<List<ApiProvider>, List<Conversation>> {
+    fun load(context: Context): Triple<List<ApiProvider>, List<Conversation>, List<EnvSelection>> {
         // Try external first, fall back to internal
         val file = if (getExternalFile().exists()) getExternalFile() else getInternalFile(context)
         return try {
-            if (!file.exists()) return Pair(emptyList(), emptyList())
+            if (!file.exists()) return Triple(emptyList(), emptyList(), emptyList())
             parseJson(file.readText(Charsets.UTF_8))
         } catch (e: Exception) {
             // Try internal as last resort
             try {
-                if (!getInternalFile(context).exists()) return Pair(emptyList(), emptyList())
+                if (!getInternalFile(context).exists()) return Triple(emptyList(), emptyList(), emptyList())
                 parseJson(getInternalFile(context).readText(Charsets.UTF_8))
             } catch (e2: Exception) {
-                Pair(emptyList(), emptyList())
+                Triple(emptyList(), emptyList(), emptyList())
             }
         }
     }
@@ -513,6 +574,7 @@ object ApiService {
         message: String,
         history: List<ChatMessage>,
         projectPath: String?,
+        envSelections: List<EnvSelection> = emptyList(),
         onReasoning: (String) -> Unit = {},
         onContent: (String) -> Unit = {},
         onDone: () -> Unit = {},
@@ -531,6 +593,13 @@ object ApiService {
                                     append("你是 IDE Agent，运行在 Android 设备上。")
                                     append("你拥有对项目目录的完整读写权限。")
                                     append("项目根目录: $projectPath\n\n")
+                                    if (envSelections.isNotEmpty()) {
+                                        append("用户配置的开发环境:\n")
+                                        envSelections.forEach { e ->
+                                            append("- ${e.name} ${e.version}\n")
+                                        }
+                                        append("\n请根据上述环境生成适配的代码。\n\n")
+                                    }
                                     append("请直接在回复中使用以下指令操作文件，不要只提供建议：\n")
                                     append("- 【READ:相对路径】- 读取文件内容\n")
                                     append("- 【WRITE:相对路径】后跟文件内容再以【END_WRITE】结束 - 写入文件\n")
@@ -664,7 +733,7 @@ object ApiService {
                     followHistory.add(ChatMessage("user", message))
                     followHistory.addAll(toolCallMessages)
                     followHistory.addAll(toolResults)
-                    sendMessageFollowUp(provider, followHistory, projectPath, onReasoning, onContent, onDone, onError)
+                    sendMessageFollowUp(provider, followHistory, projectPath, envSelections, onReasoning, onContent, onDone, onError)
                 } else if (isAgentsMode) {
                     val responseText = content.toString()
                     val ops = parseOpMarkers(responseText)
@@ -700,7 +769,7 @@ object ApiService {
                         fh.addAll(history)
                         fh.add(ChatMessage("user", message))
                         fh.add(ChatMessage("assistant", responseText))
-                        sendMessageFollowUp(provider, fh, projectPath, onReasoning, onContent, onDone, onError)
+                        sendMessageFollowUp(provider, fh, projectPath, envSelections, onReasoning, onContent, onDone, onError)
                     } else {
                         mainHandler.post { onDone() }
                     }
@@ -745,6 +814,7 @@ object ApiService {
         provider: ApiProvider,
         history: List<ChatMessage>,
         projectPath: String?,
+        envSelections: List<EnvSelection> = emptyList(),
         onReasoning: (String) -> Unit,
         onContent: (String) -> Unit,
         onDone: () -> Unit,
@@ -763,6 +833,13 @@ object ApiService {
                                     append("你是 IDE Agent，运行在 Android 设备上。")
                                     append("你拥有对项目目录的完整读写权限。")
                                     append("项目根目录: $projectPath\n\n")
+                                    if (envSelections.isNotEmpty()) {
+                                        append("用户配置的开发环境:\n")
+                                        envSelections.forEach { e ->
+                                            append("- ${e.name} ${e.version}\n")
+                                        }
+                                        append("\n请根据上述环境生成适配的代码。\n\n")
+                                    }
                                     append("请直接在回复中使用以下指令操作文件，不要只提供建议：\n")
                                     append("- 【READ:相对路径】- 读取文件内容\n")
                                     append("- 【WRITE:相对路径】后跟文件内容再以【END_WRITE】结束 - 写入文件\n")
@@ -905,7 +982,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-enum class Screen { Home, Settings }
+enum class Screen { Home, Settings, Setup }
 
 @Composable
 fun MainApp(appContext: Context) {
@@ -918,23 +995,31 @@ fun MainApp(appContext: Context) {
     var projects by remember { mutableStateOf<List<Project>>(emptyList()) }
     var currentProject by remember { mutableStateOf<Project?>(null) }
     var refreshingProject by remember { mutableStateOf(false) }
+    val envSelections = remember { mutableStateListOf<EnvSelection>() }
 
     LaunchedEffect(Unit) {
-        val (p, c) = ConfigStorage.load(appContext)
+        val (p, c, e) = ConfigStorage.load(appContext)
         providers.addAll(p)
         conversations.addAll(c)
-        if (conversations.isEmpty()) {
-            val conv = Conversation()
-            conversations.add(conv)
-            currentConvId = conv.id
+        envSelections.addAll(e)
+        if (providers.isEmpty()) {
+            currentScreen = Screen.Setup
         } else {
-            currentConvId = conversations.last().id
+            if (conversations.isEmpty()) {
+                val conv = Conversation()
+                conversations.add(conv)
+                currentConvId = conv.id
+            } else {
+                currentConvId = conversations.last().id
+            }
         }
         projects = FileOps.loadProjects(appContext)
     }
 
-    LaunchedEffect(providers.toList(), conversations.toList()) {
-        ConfigStorage.save(appContext, providers, conversations)
+    LaunchedEffect(providers.toList(), conversations.toList(), envSelections.toList()) {
+        if (providers.isNotEmpty() || envSelections.isNotEmpty()) {
+            ConfigStorage.save(appContext, providers, conversations, envSelections)
+        }
     }
 
     when (currentScreen) {
@@ -947,6 +1032,7 @@ fun MainApp(appContext: Context) {
                     isAgentEnabled = isAgentEnabled,
                     onToggleAgentEnabled = { isAgentEnabled = it },
                     providers = providers,
+                    envSelections = envSelections,
                     conversations = conversations,
                     conversation = conv,
                     currentProject = currentProject,
@@ -984,7 +1070,12 @@ fun MainApp(appContext: Context) {
         }
         Screen.Settings -> SettingsScreen(
             providers = providers,
+            envSelections = envSelections,
             onBack = { currentScreen = Screen.Home }
+        )
+        Screen.Setup -> SetupWizard(
+            envSelections = envSelections,
+            onComplete = { currentScreen = Screen.Home }
         )
     }
 }
@@ -997,6 +1088,7 @@ fun HomeScreen(
     isAgentEnabled: Boolean,
     onToggleAgentEnabled: (Boolean) -> Unit,
     providers: List<ApiProvider>,
+    envSelections: List<EnvSelection>,
     conversations: List<Conversation>,
     conversation: Conversation,
     currentProject: Project?,
@@ -1034,7 +1126,22 @@ fun HomeScreen(
             modifier = Modifier.fillMaxSize(),
             topBar = {
                 TopAppBar(
-                    title = { Text(conversation.title) },
+                    title = {
+                        Column {
+                            Text(
+                                text = conversation.title,
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1
+                            )
+                            if (isAgentsMode && selectedProvider != null) {
+                                Text(
+                                    text = "🤖 ${selectedProvider!!.customName.ifEmpty { selectedProvider!!.modelName }}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    },
                     navigationIcon = {
                         IconButton(onClick = { menuOpen = true }) {
                             Icon(Icons.Default.Menu, contentDescription = "菜单")
@@ -1077,7 +1184,7 @@ fun HomeScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             OutlinedTextField(
@@ -1086,9 +1193,34 @@ fun HomeScreen(
                                 modifier = Modifier.weight(1f),
                                 placeholder = { Text("输入消息...") },
                                 singleLine = true,
-                                enabled = !isLoading
+                                enabled = !isLoading,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                                )
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(
+                                        if (isAgentEnabled) MaterialTheme.colorScheme.primary
+                                        else Color.Transparent
+                                    )
+                                    .border(
+                                        width = if (isAgentEnabled) 0.dp else 1.dp,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        shape = RoundedCornerShape(6.dp)
+                                    )
+                                    .clickable { onToggleAgentEnabled(!isAgentEnabled) }
+                                    .padding(horizontal = 10.dp, vertical = 10.dp)
+                            ) {
+                                Text(
+                                    text = if (isAgentEnabled) "🤖" else "🧑",
+                                    fontSize = 16.sp
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
                             IconButton(
                                 onClick = {
                                     val text = inputText.trim()
@@ -1109,6 +1241,7 @@ fun HomeScreen(
                                             message = text,
                                             history = messages,
                                             projectPath = if (isAgentEnabled) currentProject?.path else null,
+                                            envSelections = envSelections,
                                             onReasoning = { acc -> streamReasoning = acc },
                                             onContent = { acc -> streamContent = acc },
                                             onDone = {
@@ -1126,39 +1259,14 @@ fun HomeScreen(
                                         )
                                     }
                                 },
-                                enabled = !isLoading
+                                enabled = !isLoading,
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.primary)
                             ) {
-                                Icon(Icons.Default.Send, contentDescription = "发送")
+                                Icon(Icons.Default.Send, contentDescription = "发送", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onPrimary)
                             }
-                        }
-                    }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(
-                                    if (isAgentEnabled) MaterialTheme.colorScheme.primary
-                                    else Color.Transparent
-                                )
-                                .border(
-                                    width = if (isAgentEnabled) 0.dp else 1.dp,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    shape = RoundedCornerShape(6.dp)
-                                )
-                                .clickable { onToggleAgentEnabled(!isAgentEnabled) }
-                                .padding(horizontal = 24.dp, vertical = 6.dp)
-                        ) {
-                            Text(
-                                text = "Agent",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (isAgentEnabled) MaterialTheme.colorScheme.onPrimary
-                                else MaterialTheme.colorScheme.primary
-                            )
                         }
                     }
                 }
@@ -1176,6 +1284,127 @@ fun HomeScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Text("请先在设置中添加服务商", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    } else if (messages.isEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 20.dp, vertical = 20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "👋 欢迎使用",
+                                style = MaterialTheme.typography.headlineLarge,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "选择下方模型开始对话，或创建项目使用 IDE 功能",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            Text(
+                                text = "选择模型",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            providers.forEachIndexed { index, provider ->
+                                Card(
+                                    onClick = { selectedIndex = index },
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (index == selectedIndex)
+                                            MaterialTheme.colorScheme.primaryContainer
+                                        else MaterialTheme.colorScheme.surfaceContainerHigh
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "🤖 ${provider.customName.ifEmpty { provider.modelName }}",
+                                            modifier = Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                        Text(
+                                            text = provider.modelName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(24.dp))
+
+                            if (currentProject != null) {
+                                Text(
+                                    text = "当前项目",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                    )
+                                ) {
+                                    Text(
+                                        text = "📁 ${currentProject!!.name}",
+                                        modifier = Modifier.padding(12.dp),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+
+                            if (projects.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text(
+                                    text = "最近项目",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                projects.take(3).forEach { p ->
+                                    val fileCount = remember(p) { FileOps.listFiles(p.path).size }
+                                    Card(
+                                        onClick = { onSelectProject(p) },
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = if (p == currentProject)
+                                                MaterialTheme.colorScheme.primaryContainer
+                                            else MaterialTheme.colorScheme.surfaceContainerHigh
+                                        )
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "📁 ${p.name}",
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                            Text(
+                                                text = "$fileCount 文件",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(24.dp))
+                            TextButton(onClick = onNewChat) {
+                                Text("新对话")
+                            }
                         }
                     } else {
                         Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -1219,6 +1448,26 @@ fun HomeScreen(
                                 ChatBubble(msg, isStreaming && msg.role == "assistant" && streamContent.isEmpty())
                             }
                         }
+                        if (isLoading && messages.isNotEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    Text(
+                                        text = if (isStreaming) "正在生成..." else "思考中...",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             } else {
@@ -1258,20 +1507,41 @@ fun HomeScreen(
                             Spacer(modifier = Modifier.height(8.dp))
                             LazyColumn(modifier = Modifier.weight(1f)) {
                                 items(projects) { p ->
+                                    val fileCount = remember(p) { FileOps.listFiles(p.path).size }
                                     Card(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .padding(vertical = 4.dp)
                                             .clickable { onSelectProject(p) },
                                         colors = CardDefaults.cardColors(
-                                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                            containerColor = if (p == currentProject)
+                                                MaterialTheme.colorScheme.primaryContainer
+                                            else MaterialTheme.colorScheme.surfaceContainerHigh
                                         )
                                     ) {
-                                        Text(
-                                            text = p.name,
-                                            modifier = Modifier.padding(12.dp),
-                                            style = MaterialTheme.typography.bodyLarge
-                                        )
+                                        Column(modifier = Modifier.padding(12.dp)) {
+                                            Text(
+                                                text = "📁 ${p.name}",
+                                                style = MaterialTheme.typography.bodyLarge
+                                            )
+                                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                            ) {
+                                                Text(
+                                                    text = "$fileCount 个文件",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Text(
+                                                    text = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(p.createdAt)),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1281,6 +1551,7 @@ fun HomeScreen(
                     var selectedFilePath by remember { mutableStateOf<String?>(null) }
                     var fileContent by remember { mutableStateOf("") }
                     var refreshTrigger by remember { mutableIntStateOf(0) }
+                    var showFileTree by remember { mutableStateOf(false) }
                     var expandedPaths by remember { mutableStateOf(setOf<String>()) }
                     var clipboardFile by remember { mutableStateOf<java.io.File?>(null) }
                     var isCutAction by remember { mutableStateOf(false) }
@@ -1333,39 +1604,42 @@ fun HomeScreen(
                         var showCtxMenu by remember { mutableStateOf(false) }
 
                         Box {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(start = (depth * 20).dp)
-                                    .combinedClickable(
-                                        onClick = {
-                                            if (file.isDirectory) {
-                                                expandedPaths = if (isExpanded) expandedPaths - file.absolutePath else expandedPaths + file.absolutePath
-                                            } else {
-                                                selectedFilePath = file.absolutePath
-                                                fileContent = FileOps.readFile(file.absolutePath)
-                                            }
-                                        },
-                                        onLongClick = { showCtxMenu = true }
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = (depth * 20).dp)
+                                        .combinedClickable(
+                                            onClick = {
+                                                if (file.isDirectory) {
+                                                    expandedPaths = if (isExpanded) expandedPaths - file.absolutePath else expandedPaths + file.absolutePath
+                                                } else {
+                                                    selectedFilePath = file.absolutePath
+                                                    fileContent = FileOps.readFile(file.absolutePath)
+                                                }
+                                            },
+                                            onLongClick = { showCtxMenu = true }
+                                        )
+                                        .background(
+                                            if (file.absolutePath == selectedFilePath) MaterialTheme.colorScheme.primaryContainer
+                                            else Color.Transparent
+                                        )
+                                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (file.isDirectory) {
+                                        Text(if (isExpanded) "▼" else "▶", fontSize = 10.sp)
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("📁", fontSize = 12.sp)
+                                    } else {
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("📄", fontSize = 12.sp)
+                                        Spacer(Modifier.width(4.dp))
+                                    }
+                                    Text(
+                                        text = if (file.isDirectory) file.name else file.nameWithoutExtension,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.weight(1f)
                                     )
-                                    .background(
-                                        if (file.absolutePath == selectedFilePath) MaterialTheme.colorScheme.primaryContainer
-                                        else Color.Transparent
-                                    )
-                                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (file.isDirectory) {
-                                    Text(if (isExpanded) "▼" else "▶", fontSize = 10.sp)
-                                    Spacer(Modifier.width(4.dp))
-                                } else {
-                                    Spacer(Modifier.width(16.dp))
-                                }
-                                Text(
-                                    text = if (file.isDirectory) file.name else file.nameWithoutExtension,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.weight(1f)
-                                )
                                 if (!file.isDirectory) {
                                     val ext = file.extension
                                     if (ext.isNotEmpty()) {
@@ -1425,39 +1699,36 @@ fun HomeScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                                .padding(horizontal = 4.dp, vertical = 2.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            TextButton(onClick = { showFileTree = !showFileTree }) {
+                                Text("📁")
+                            }
                             Text(
                                 text = currentProject.name,
-                                style = MaterialTheme.typography.titleSmall,
-                                modifier = Modifier.weight(1f).padding(4.dp)
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
                             )
                             if (clipboardFile != null) {
                                 TextButton(onClick = { pasteTargetPath = ""; showPasteDialog = true }) {
                                     Text("粘贴")
                                 }
                             }
-                            TextButton(onClick = { refreshTree() }) {
-                                Text("刷新")
-                            }
-                        }
-                        Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxHeight()
-                                    .fillMaxWidth(0.3f)
-                                    .verticalScroll(rememberScrollState())
-                                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                            ) {
-                                key(refreshTrigger) {
-                                    val rootFiles = FileOps.listFiles(currentProject.path)
-                                    rootFiles.forEach { file ->
-                                        FileTreeItem(file = file, depth = 0)
-                                    }
+                            if (selectedFilePath != null) {
+                                TextButton(onClick = {
+                                    FileOps.writeFile(selectedFilePath!!, fileContent)
+                                    android.widget.Toast.makeText(appContext, "✅ 已保存", android.widget.Toast.LENGTH_SHORT).show()
+                                }) {
+                                    Text("保存")
                                 }
                             }
-                            Column(modifier = Modifier.weight(1f).fillMaxHeight().padding(start = 4.dp)) {
+                            TextButton(onClick = { refreshTree() }) {
+                                Text("↻")
+                            }
+                        }
+                        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                            Column(modifier = Modifier.fillMaxSize().padding(start = 4.dp)) {
                                 if (selectedFilePath != null) {
                                     Row(
                                         modifier = Modifier
@@ -1473,7 +1744,7 @@ fun HomeScreen(
                                         )
                                         TextButton(onClick = {
                                             FileOps.writeFile(selectedFilePath!!, fileContent)
-                                            android.widget.Toast.makeText(appContext, "已保存", android.widget.Toast.LENGTH_SHORT).show()
+                                            android.widget.Toast.makeText(appContext, "✅ 已保存", android.widget.Toast.LENGTH_SHORT).show()
                                         }) {
                                             Text("保存")
                                         }
@@ -1492,8 +1763,47 @@ fun HomeScreen(
                                         modifier = Modifier.fillMaxSize(),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text("选择左侧文件进行编辑", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text("选择文件进行编辑", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
+                                }
+                            }
+
+                            if (showFileTree) {
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .fillMaxWidth(0.55f)
+                                            .verticalScroll(rememberScrollState())
+                                            .background(MaterialTheme.colorScheme.surface)
+                                            .padding(end = 8.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(8.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("文件", style = MaterialTheme.typography.titleSmall)
+                                            TextButton(onClick = { showFileTree = false }) {
+                                                Text("✕")
+                                            }
+                                        }
+                                        key(refreshTrigger) {
+                                            val rootFiles = FileOps.listFiles(currentProject.path)
+                                            rootFiles.forEach { file ->
+                                                FileTreeItem(file = file, depth = 0)
+                                            }
+                                        }
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Color.Black.copy(alpha = 0.3f))
+                                            .clickable(
+                                                interactionSource = remember { MutableInteractionSource() },
+                                                indication = null
+                                            ) { showFileTree = false }
+                                    )
                                 }
                             }
                         }
@@ -1610,7 +1920,22 @@ fun HomeScreen(
                         TextButton(onClick = { onNewChat(); menuOpen = false }) {
                             Text("新对话", style = MaterialTheme.typography.bodyLarge)
                         }
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        var searchQuery by remember { mutableStateOf("") }
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("搜索对话...") },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+
                         if (conversations.isEmpty()) {
                             Text(
                                 text = "暂无历史对话",
@@ -1618,42 +1943,67 @@ fun HomeScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         } else {
-                            Text(
-                                text = "历史对话",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            LazyColumn(modifier = Modifier.weight(1f)) {
-                                items(conversations.sortedByDescending { it.createdAt }) { conv ->
+                            val filtered = if (searchQuery.isBlank()) conversations
+                                else conversations.filter { it.title.contains(searchQuery, ignoreCase = true) }
+                            val grouped = filtered.sortedByDescending { it.createdAt }
+                                .groupBy { conv ->
+                                    providers.getOrNull(conv.providerIndex)?.let { it.customName.ifEmpty { it.modelName } } ?: "默认"
+                                }
+                            grouped.forEach { (providerName, convs) ->
+                                Text(
+                                    text = "🤖 $providerName",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                                )
+                                convs.forEach { conv ->
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .clickable { menuOpen = false; onSwitchConversation(conv) }
-                                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                                            .padding(vertical = 6.dp, horizontal = 4.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
                                                 text = conv.title,
                                                 style = MaterialTheme.typography.bodyMedium,
+                                                maxLines = 1,
                                                 color = if (conv.id == conversation.id)
                                                     MaterialTheme.colorScheme.primary
                                                 else MaterialTheme.colorScheme.onSurface
                                             )
                                             Text(
-                                                text = "${conv.messages.size} 条消息",
+                                                text = conv.messages.size.let { "$it 条消息" },
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
-                                        IconButton(
-                                            onClick = { deleteConfirmConv = conv },
-                                            modifier = Modifier.size(32.dp)
-                                        ) {
-                                            Icon(Icons.Default.Delete, contentDescription = "删除", modifier = Modifier.size(18.dp))
+                                        var showMore by remember { mutableStateOf(false) }
+                                        Box {
+                                            IconButton(
+                                                onClick = { showMore = true },
+                                                modifier = Modifier.size(32.dp)
+                                            ) {
+                                                Icon(Icons.Default.MoreVert, contentDescription = "更多", modifier = Modifier.size(18.dp))
+                                            }
+                                            DropdownMenu(
+                                                expanded = showMore,
+                                                onDismissRequest = { showMore = false }
+                                            ) {
+                                                DropdownMenuItem(
+                                                    text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                                                    onClick = {
+                                                        showMore = false
+                                                        deleteConfirmConv = conv
+                                                    }
+                                                )
+                                            }
                                         }
                                     }
+                                }
+                                if (grouped.keys.last() != providerName) {
+                                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                                 }
                             }
                         }
@@ -1898,8 +2248,9 @@ fun ChatBubble(message: ChatMessage, isThinking: Boolean = false) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(providers: MutableList<ApiProvider>, onBack: () -> Unit) {
+fun SettingsScreen(providers: MutableList<ApiProvider>, envSelections: MutableList<EnvSelection>, onBack: () -> Unit) {
     var showDialog by remember { mutableStateOf(false) }
+    var showEnvManager by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -1921,6 +2272,12 @@ fun SettingsScreen(providers: MutableList<ApiProvider>, onBack: () -> Unit) {
         ) {
             Button(onClick = { showDialog = true }) {
                 Text("添加服务商")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(onClick = { showEnvManager = true }) {
+                Text("配置开发环境 (${envSelections.size})")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -1957,6 +2314,13 @@ fun SettingsScreen(providers: MutableList<ApiProvider>, onBack: () -> Unit) {
                 providers.add(provider)
                 showDialog = false
             }
+        )
+    }
+
+    if (showEnvManager) {
+        EnvManagerDialog(
+            envSelections = envSelections,
+            onDismiss = { showEnvManager = false }
         )
     }
 }
@@ -2053,4 +2417,319 @@ fun AddProviderDialog(onDismiss: () -> Unit, onConfirm: (ApiProvider) -> Unit) {
             }
         }
     )
+}
+
+@Composable
+fun SetupWizard(envSelections: MutableList<EnvSelection>, onComplete: () -> Unit) {
+    var editingEnv by remember { mutableStateOf<LangEnvironment?>(null) }
+    var step by remember { mutableIntStateOf(0) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp)
+    ) {
+        Text(
+            text = "配置开发环境",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "选择你使用的编程语言和环境，AI 将根据配置生成适配代码",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            categoryOrder.forEach { category ->
+                val envs = allEnvironments.filter { it.category == category }
+                if (envs.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = category,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                        )
+                    }
+                    items(envs) { env ->
+                        val selected = envSelections.find { it.name == env.name }
+                        Card(
+                            onClick = { editingEnv = env },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (selected != null)
+                                    MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surfaceContainerHigh
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${env.icon}  ${env.name}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (selected != null) {
+                                    Text(
+                                        text = selected.version,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                } else {
+                                    Text(
+                                        text = "添加",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            TextButton(onClick = onComplete) {
+                Text("跳过")
+            }
+            Button(
+                onClick = onComplete,
+                enabled = envSelections.isNotEmpty()
+            ) {
+                Text("完成配置 (${envSelections.size} 个环境)")
+            }
+        }
+    }
+
+    if (editingEnv != null) {
+        EnvConfigDialog(
+            env = editingEnv!!,
+            currentSelection = envSelections.find { it.name == editingEnv!!.name },
+            onDismiss = { editingEnv = null },
+            onConfirm = { name, version ->
+                val existing = envSelections.indexOfFirst { it.name == name }
+                if (existing >= 0) {
+                    envSelections[existing] = EnvSelection(name, version)
+                } else {
+                    envSelections.add(EnvSelection(name, version))
+                }
+                editingEnv = null
+            },
+            onRemove = { name ->
+                envSelections.removeAll { it.name == name }
+                editingEnv = null
+            }
+        )
+    }
+}
+
+@Composable
+fun EnvConfigDialog(
+    env: LangEnvironment,
+    currentSelection: EnvSelection?,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String) -> Unit,
+    onRemove: (String) -> Unit
+) {
+    var selectedVersion by remember { mutableStateOf(currentSelection?.version ?: env.versions.first()) }
+    var versionExpanded by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${env.icon}  ${env.name}") },
+        text = {
+            Column {
+                Text(
+                    text = "选择版本",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = selectedVersion,
+                    onValueChange = { selectedVersion = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    trailingIcon = {
+                        IconButton(onClick = { versionExpanded = true }) {
+                            Icon(Icons.Default.ArrowDropDown, "选择版本")
+                        }
+                    }
+                )
+                DropdownMenu(
+                    expanded = versionExpanded,
+                    onDismissRequest = { versionExpanded = false }
+                ) {
+                    env.versions.forEach { v ->
+                        DropdownMenuItem(
+                            text = { Text(v) },
+                            onClick = {
+                                selectedVersion = v
+                                versionExpanded = false
+                            }
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "提示：AI 会根据所选语言和版本生成对应代码，确保语法和 API 兼容。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (currentSelection != null) {
+                    TextButton(onClick = { onRemove(env.name) }) {
+                        Text("移除", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                Button(onClick = { onConfirm(env.name, selectedVersion) }) {
+                    Text(if (currentSelection != null) "更新" else "添加")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
+fun EnvManagerDialog(envSelections: MutableList<EnvSelection>, onDismiss: () -> Unit) {
+    var editingEnv by remember { mutableStateOf<LangEnvironment?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("配置开发环境") },
+        text = {
+            LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                if (envSelections.isNotEmpty()) {
+                    item {
+                        Text(
+                            "已选环境 (${envSelections.size})",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+                    items(envSelections.toList()) { sel ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${allEnvironments.find { it.name == sel.name }?.icon ?: ""}  ${sel.name} ${sel.version}",
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(
+                                onClick = { envSelections.removeAll { it.name == sel.name } },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "移除", modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    }
+                    item { Spacer(modifier = Modifier.height(12.dp)) }
+                }
+
+                item {
+                    Text(
+                        "所有语言环境",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+
+                categoryOrder.forEach { category ->
+                    val envs = allEnvironments.filter { it.category == category }
+                    if (envs.isNotEmpty()) {
+                        item {
+                            Text(
+                                text = category,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                            )
+                        }
+                        items(envs) { env ->
+                            val selected = envSelections.find { it.name == env.name }
+                            Card(
+                                onClick = { editingEnv = env },
+                                modifier = Modifier.fillMaxWidth().padding(start = 8.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (selected != null)
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceContainerHigh
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("${env.icon}  ${env.name}", modifier = Modifier.weight(1f))
+                                    Text(
+                                        if (selected != null) selected.version else "添加",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (selected != null) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                item { Spacer(modifier = Modifier.height(8.dp)) }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) { Text("完成") }
+        }
+    )
+
+    if (editingEnv != null) {
+        EnvConfigDialog(
+            env = editingEnv!!,
+            currentSelection = envSelections.find { it.name == editingEnv!!.name },
+            onDismiss = { editingEnv = null },
+            onConfirm = { name, version ->
+                val existing = envSelections.indexOfFirst { it.name == name }
+                if (existing >= 0) {
+                    envSelections[existing] = EnvSelection(name, version)
+                } else {
+                    envSelections.add(EnvSelection(name, version))
+                }
+                editingEnv = null
+            },
+            onRemove = { name ->
+                envSelections.removeAll { it.name == name }
+                editingEnv = null
+            }
+        )
+    }
 }
