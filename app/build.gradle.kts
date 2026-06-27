@@ -15,8 +15,8 @@ android {
         applicationId = "com.example.apitool"
         minSdk = 24
         targetSdk = 36
-        versionCode = 4
-        versionName = "bata0.4"
+        versionCode = 5
+        versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -35,6 +35,9 @@ android {
     buildFeatures {
         compose = true
     }
+    aaptOptions {
+        noCompress("zip")
+    }
 }
 
 dependencies {
@@ -46,6 +49,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.shizuku.api)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

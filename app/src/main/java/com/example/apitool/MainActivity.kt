@@ -10,10 +10,13 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -33,6 +36,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -72,6 +76,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -92,9 +97,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.apitool.ui.theme.ApiToolTheme
+import rikka.shizuku.Shizuku
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -1022,6 +1031,99 @@ fun MainApp(appContext: Context) {
         }
     }
 
+    // --- Permission dialogs ---
+    var showStoragePermDialog by remember { mutableStateOf(false) }
+    var showShizukuPermDialog by remember { mutableStateOf(false) }
+    var shizukuGranted by remember { mutableStateOf(false) }
+    var permCheckTrigger by remember { mutableStateOf(0) }
+
+    val settingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        permCheckTrigger++
+    }
+
+    LaunchedEffect(permCheckTrigger) {
+        if (!Environment.isExternalStorageManager()) {
+            showStoragePermDialog = true
+        } else {
+            showStoragePermDialog = false
+            // Check Shizuku - check package installation first (doesn't need binder)
+            var shizukuInstalled = false
+            try {
+                appContext.packageManager.getPackageInfo("moe.shizuku.manager", 0)
+                shizukuInstalled = true
+            } catch (_: Exception) {
+                try {
+                    appContext.packageManager.getPackageInfo("moe.shizuku.privilege.api", 0)
+                    shizukuInstalled = true
+                } catch (_: Exception) {}
+            }
+            if (shizukuInstalled) {
+                var binderAlive = false
+                try {
+                    binderAlive = Shizuku.pingBinder()
+                } catch (_: IllegalStateException) {
+                    // Shizuku not initialized (no ShizukuProvider), show dialog anyway
+                } catch (_: Exception) {}
+                if (binderAlive) {
+                    shizukuGranted = true
+                } else {
+                    shizukuGranted = false
+                    showShizukuPermDialog = true
+                }
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        val listener = try {
+            Shizuku.OnRequestPermissionResultListener { _, grantResult ->
+                if (grantResult == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    shizukuGranted = true
+                }
+                showShizukuPermDialog = false
+            }
+        } catch (_: Exception) { null }
+        if (listener != null) {
+            try { Shizuku.addRequestPermissionResultListener(listener) } catch (_: Exception) {}
+        }
+        onDispose {
+            if (listener != null) {
+                try { Shizuku.removeRequestPermissionResultListener(listener) } catch (_: Exception) {}
+            }
+        }
+    }
+
+    if (showStoragePermDialog) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("需要文件管理权限") },
+            text = { Text("运行代码需要管理所有文件的权限，请在设置中开启。") },
+            confirmButton = { TextButton(onClick = {
+                showStoragePermDialog = false
+                try {
+                    val intent = android.content.Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                        data = android.net.Uri.parse("package:${appContext.packageName}")
+                    }
+                    settingsLauncher.launch(intent)
+                } catch (_: Exception) {}
+            }) { Text("确定") } },
+            dismissButton = { TextButton(onClick = { showStoragePermDialog = false }) { Text("取消") } }
+        )
+    }
+
+    if (showShizukuPermDialog) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("需要 Shizuku 权限") },
+            text = { Text("检测到已安装 Shizuku，授予权限后可以使用更高级的功能运行代码。") },
+            confirmButton = { TextButton(onClick = {
+                showShizukuPermDialog = false
+                try { Shizuku.requestPermission(1001) } catch (_: Exception) {}
+            }) { Text("确定") } },
+            dismissButton = { TextButton(onClick = { showShizukuPermDialog = false }) { Text("取消") } }
+        )
+    }
+
     when (currentScreen) {
         Screen.Home -> {
             val conv = conversations.find { it.id == currentConvId }
@@ -1562,6 +1664,14 @@ fun HomeScreen(
                     var moveTargetPath by remember { mutableStateOf("") }
                     var showPasteDialog by remember { mutableStateOf(false) }
                     var pasteTargetPath by remember { mutableStateOf("") }
+                    var showProjectList by remember { mutableStateOf(false) }
+                    var showRunOutput by remember { mutableStateOf(false) }
+                    var runOutputText by remember { mutableStateOf("") }
+                    var runOutputTitle by remember { mutableStateOf("") }
+                    var runLoading by remember { mutableStateOf(false) }
+                    var showInstallPrompt by remember { mutableStateOf(false) }
+                    var installLang by remember { mutableStateOf("") }
+                    var installPkgName by remember { mutableStateOf("") }
 
                     // Refresh file tree on every entry into IDE mode
                     LaunchedEffect(Unit) { refreshTrigger++ }
@@ -1596,6 +1706,260 @@ fun HomeScreen(
                         }
                         clipboardFile = null
                         refreshTree()
+                    }
+
+                    fun getLanguageForExt(ext: String): String = when (ext.lowercase()) {
+                        "py" -> "Python"
+                        "java" -> "Java"
+                        "kt", "kts" -> "Kotlin"
+                        "js", "mjs" -> "JavaScript (Node.js)"
+                        "ts" -> "TypeScript"
+                        "go" -> "Go"
+                        "rs" -> "Rust"
+                        "cpp", "cc", "cxx", "hpp" -> "C++"
+                        "c", "h" -> "C"
+                        "cs" -> "C#"
+                        "rb" -> "Ruby"
+                        "php" -> "PHP"
+                        "scala", "sc" -> "Scala"
+                        "sh", "bash" -> "Shell"
+                        "html", "htm" -> "HTML/CSS"
+                        "css" -> "CSS"
+                        "vue" -> "Vue.js"
+                        "jsx", "tsx" -> "React"
+                        "swift" -> "Swift"
+                        "r" -> "R"
+                        else -> ""
+                    }
+
+                    fun getRuntimeCmd(ext: String): List<String>? = when (ext.lowercase()) {
+                        "sh", "bash" -> listOf("sh")
+                        "py" -> listOf("python3", "python")
+                        "js", "mjs" -> listOf("node")
+                        "java" -> listOf("java")
+                        "kt", "kts" -> listOf("kotlin")
+                        "go" -> listOf("go", "run")
+                        "rs" -> listOf("rustc")
+                        "cpp", "cc", "cxx" -> listOf("g++", "clang++")
+                        "c" -> listOf("gcc", "clang")
+                        else -> null
+                    }
+
+                    fun runCurrentFile(path: String, content: String, envs: List<EnvSelection>, ctx: Context) {
+                        val ext = path.substringAfterLast('.', "")
+                        if (ext.isEmpty()) return
+
+                        FileOps.writeFile(path, content)
+
+                        if (ext.lowercase() == "sh" || ext.lowercase() == "bash") {
+                            runLoading = true
+                            Thread {
+                                try {
+                                    val proc = ProcessBuilder("sh", path)
+                                        .redirectErrorStream(true)
+                                        .start()
+                                    val out = proc.inputStream.bufferedReader().readText()
+                                    proc.waitFor()
+                                    runOutputTitle = "Shell 运行结果 (exit=${proc.exitValue()})"
+                                    runOutputText = out.ifEmpty { "(无输出)" }
+                                } catch (e: Exception) {
+                                    runOutputTitle = "运行失败"
+                                    runOutputText = e.message ?: "未知错误"
+                                }
+                                runLoading = false
+                                showRunOutput = true
+                            }.start()
+                            return
+                        }
+
+                        if (ext.lowercase() == "js" || ext.lowercase() == "mjs") {
+                            runLoading = true
+                            val webView = android.webkit.WebView(ctx)
+                            webView.settings.javaScriptEnabled = true
+                            webView.addJavascriptInterface(object {
+                                @android.webkit.JavascriptInterface
+                                fun onResult(result: String) {
+                                    runOutputTitle = "JavaScript 运行结果"
+                                    runOutputText = result
+                                    runLoading = false
+                                    showRunOutput = true
+                                }
+                                @android.webkit.JavascriptInterface
+                                fun onError(error: String) {
+                                    runOutputTitle = "运行失败"
+                                    runOutputText = error
+                                    runLoading = false
+                                    showRunOutput = true
+                                }
+                            }, "Android")
+                            val wrapped = """
+                                try {
+                                    var result = (function() {
+                                        ${content.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")}
+                                    })();
+                                    Android.onResult(result !== undefined ? String(result) : "(undefined)");
+                                } catch(e) {
+                                    Android.onError(e.message);
+                                }
+                            """.trimIndent()
+                            webView.evaluateJavascript("(function(){ $wrapped })()", null)
+                            return
+                        }
+
+                        val cmds = getRuntimeCmd(ext)
+                        if (cmds == null) {
+                            runOutputTitle = "不支持"
+                            runOutputText = "不支持的文件类型: .$ext"
+                            showRunOutput = true
+                            return
+                        }
+
+                        runLoading = true
+                        Thread {
+                            try {
+                                val firstCmd = cmds.first()
+                                val lang = getLanguageForExt(ext)
+
+                                // Save script to shared storage for accessibility
+                                val sharedDir = java.io.File("/storage/emulated/0/apitool")
+                                sharedDir.mkdirs()
+                                val scriptFile = java.io.File(sharedDir, "run_${System.nanoTime()}.$ext")
+                                scriptFile.writeText(content)
+                                scriptFile.setReadable(true, false)
+                                scriptFile.setWritable(true, false)
+
+                                // For Python: use bundled interpreter
+                                if (ext.lowercase() == "py") {
+                                    val pythonDir = java.io.File(ctx.filesDir, "python")
+                                    val pythonBin = java.io.File(pythonDir, "bin/python3.13")
+                                    val androidSupportLib = java.io.File(pythonDir, "lib/libandroid-support.so")
+                                    if (!pythonBin.isFile() || pythonBin.length() == 0L || !androidSupportLib.isFile()) {
+                                        try {
+                                            if (pythonDir.exists()) pythonDir.deleteRecursively()
+                                            pythonDir.mkdirs()
+                                            // Write asset to temp file, then use ZipFile (more reliable than ZipInputStream)
+                                            val tmpZip = java.io.File(ctx.cacheDir, "python_extract.zip")
+                                            ctx.assets.open("python/python.zip").use { src -> tmpZip.outputStream().use { dst -> src.copyTo(dst) } }
+                                            if (!tmpZip.isFile() || tmpZip.length() < 1024L) {
+                                                throw java.io.IOException("Temp zip is empty or too small: ${tmpZip.length()} bytes")
+                                            }
+                                            val zf = java.util.zip.ZipFile(tmpZip)
+                                            val entries = zf.entries()
+                                            while (entries.hasMoreElements()) {
+                                                val ze = entries.nextElement()
+                                                val file = java.io.File(pythonDir, ze.name)
+                                                if (ze.isDirectory) { file.mkdirs() }
+                                                else {
+                                                    file.parentFile?.mkdirs()
+                                                    zf.getInputStream(ze).use { src -> file.outputStream().use { dst -> src.copyTo(dst) } }
+                                                }
+                                            }
+                                            zf.close()
+                                            tmpZip.delete()
+                                            try {
+                                                Runtime.getRuntime().exec(arrayOf("chmod", "-R", "755", java.io.File(pythonDir, "bin").absolutePath)).waitFor()
+                                            } catch (_: Exception) {}
+                                        } catch (e: Exception) {
+                                            runOutputTitle = "Python 环境准备失败"
+                                            runOutputText = "内嵌 Python 提取错误: ${e.message}"
+                                            runLoading = false
+                                            showRunOutput = true
+                                            return@Thread
+                                        }
+                                    }
+
+                                    if (pythonBin.isFile() && pythonBin.length() > 0L) {
+                                        fun runPython(cmd: List<String>): Boolean = try {
+                                            val proc = ProcessBuilder(cmd).apply {
+                                                environment()["LD_LIBRARY_PATH"] = "${pythonDir.absolutePath}/lib"
+                                                environment()["PYTHONHOME"] = pythonDir.absolutePath
+                                                environment()["HOME"] = sharedDir.absolutePath
+                                                redirectErrorStream(true)
+                                            }.start()
+                                            val out = proc.inputStream.bufferedReader().readText()
+                                            proc.waitFor()
+                                            runOutputTitle = "$lang 运行结果 (exit=${proc.exitValue()})"
+                                            runOutputText = out.ifEmpty { "(无输出)" }
+                                            runLoading = false
+                                            showRunOutput = true
+                                            true
+                                        } catch (_: Exception) { false }
+                                        // Try direct execution first, fallback to linker64 if /data is noexec
+                                        if (!runPython(listOf(pythonBin.absolutePath, scriptFile.absolutePath))) {
+                                            val linker = if (java.io.File("/system/bin/linker64").exists()) "/system/bin/linker64" else "/system/bin/linker"
+                                            runPython(listOf(linker, pythonBin.absolutePath, scriptFile.absolutePath))
+                                        }
+                                        return@Thread
+                                    }
+                                }
+
+                                // For other languages, try Termux
+                                val termuxInstalled = try {
+                                    ctx.packageManager.getPackageInfo("com.termux", 0)
+                                    true
+                                } catch (_: Exception) { false }
+
+                                var executed = false
+                                if (termuxInstalled) {
+                                    val termuxBinary = "/data/data/com.termux/files/usr/bin/$firstCmd"
+                                    try {
+                                        val proc = ProcessBuilder(termuxBinary, scriptFile.absolutePath)
+                                            .redirectErrorStream(true)
+                                            .start()
+                                        val out = proc.inputStream.bufferedReader().readText()
+                                        proc.waitFor()
+                                        runOutputTitle = "$lang 运行结果 (exit=${proc.exitValue()})"
+                                        runOutputText = out.ifEmpty { "(无输出)" }
+                                        runLoading = false
+                                        showRunOutput = true
+                                        executed = true
+                                    } catch (_: Exception) {
+                                        try {
+                                            val proc = ProcessBuilder(
+                                                "/system/bin/sh", "-c",
+                                                "export PATH=/data/data/com.termux/files/usr/bin:/system/bin; " +
+                                                "$firstCmd '${scriptFile.absolutePath}'"
+                                            ).redirectErrorStream(true).start()
+                                            val out = proc.inputStream.bufferedReader().readText()
+                                            proc.waitFor()
+                                            runOutputTitle = "$lang 运行结果 (exit=${proc.exitValue()})"
+                                            runOutputText = out.ifEmpty { "(无输出)" }
+                                            runLoading = false
+                                            showRunOutput = true
+                                            executed = true
+                                        } catch (_: Exception) {}
+                                    }
+                                }
+
+                                if (!executed) {
+                                    try {
+                                        val uri = android.net.Uri.fromFile(scriptFile)
+                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                            setDataAndType(uri, "text/plain")
+                                            setClassName("com.termux", "com.termux.app.TermuxActivity")
+                                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        ctx.startActivity(intent)
+                                        runOutputTitle = "已在 Termux 中打开"
+                                        runOutputText = "文件已保存到 ${scriptFile.absolutePath}\n\n在 Termux 中执行：\n$firstCmd ${scriptFile.absolutePath}\n\n（命令已复制到剪贴板）"
+                                        try {
+                                            val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                            cm.setPrimaryClip(android.content.ClipData.newPlainText("cmd", "$firstCmd ${scriptFile.absolutePath}"))
+                                        } catch (_: Exception) {}
+                                    } catch (_: Exception) {
+                                        runOutputTitle = "无法运行"
+                                        runOutputText = "无法启动 Termux，请在 Termux 中手动执行：\n$firstCmd ${scriptFile.absolutePath}"
+                                    }
+                                    runLoading = false
+                                    showRunOutput = true
+                                }
+                            } catch (e: Exception) {
+                                runOutputTitle = "运行失败"
+                                runOutputText = e.message ?: "未知错误"
+                            }
+                            runLoading = false
+                            if (!showRunOutput) showRunOutput = true
+                        }.start()
                     }
 
                     @Composable
@@ -1708,7 +2072,10 @@ fun HomeScreen(
                             Text(
                                 text = currentProject.name,
                                 style = MaterialTheme.typography.labelMedium,
-                                modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(horizontal = 4.dp)
+                                    .clickable { showProjectList = true }
                             )
                             if (clipboardFile != null) {
                                 TextButton(onClick = { pasteTargetPath = ""; showPasteDialog = true }) {
@@ -1721,6 +2088,11 @@ fun HomeScreen(
                                     android.widget.Toast.makeText(appContext, "✅ 已保存", android.widget.Toast.LENGTH_SHORT).show()
                                 }) {
                                     Text("保存")
+                                }
+                                TextButton(onClick = {
+                                    runCurrentFile(selectedFilePath!!, fileContent, envSelections, appContext)
+                                }) {
+                                    Text("▶")
                                 }
                             }
                             TextButton(onClick = { refreshTree() }) {
@@ -1742,22 +2114,33 @@ fun HomeScreen(
                                             style = MaterialTheme.typography.labelSmall,
                                             modifier = Modifier.weight(1f)
                                         )
-                                        TextButton(onClick = {
-                                            FileOps.writeFile(selectedFilePath!!, fileContent)
-                                            android.widget.Toast.makeText(appContext, "✅ 已保存", android.widget.Toast.LENGTH_SHORT).show()
-                                        }) {
-                                            Text("保存")
-                                        }
                                     }
-                                    OutlinedTextField(
-                                        value = fileContent,
-                                        onValueChange = { fileContent = it },
-                                        modifier = Modifier.fillMaxSize(),
-                                        textStyle = TextStyle(
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 12.sp
+                                    val highlightExt = selectedFilePath!!.substringAfterLast('.')
+                                    val highlightTrans = remember(highlightExt) { SyntaxHighlightTransformation(highlightExt) }
+                                    Box(
+                                        modifier = Modifier.fillMaxSize().background(Color(0xFF191A1C))
+                                    ) {
+                                        OutlinedTextField(
+                                            value = fileContent,
+                                            onValueChange = { fileContent = it },
+                                            modifier = Modifier.fillMaxSize(),
+                                            textStyle = TextStyle(
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 12.sp,
+                                                color = Color(0xFFD4D4D4)
+                                            ),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                cursorColor = Color(0xFFFFFFFF),
+                                                focusedBorderColor = Color(0xFF3C3C3C),
+                                                unfocusedBorderColor = Color(0xFF3C3C3C),
+                                                focusedContainerColor = Color.Transparent,
+                                                unfocusedContainerColor = Color.Transparent,
+                                                focusedTextColor = Color(0xFFD4D4D4),
+                                                unfocusedTextColor = Color(0xFFD4D4D4)
+                                            ),
+                                            visualTransformation = highlightTrans
                                         )
-                                    )
+                                    }
                                 } else {
                                     Box(
                                         modifier = Modifier.fillMaxSize(),
@@ -1770,6 +2153,15 @@ fun HomeScreen(
 
                             if (showFileTree) {
                                 Box(modifier = Modifier.fillMaxSize()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Color.Black.copy(alpha = 0.3f))
+                                            .clickable(
+                                                interactionSource = remember { MutableInteractionSource() },
+                                                indication = null
+                                            ) { showFileTree = false }
+                                    )
                                     Column(
                                         modifier = Modifier
                                             .fillMaxHeight()
@@ -1795,15 +2187,6 @@ fun HomeScreen(
                                             }
                                         }
                                     }
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(Color.Black.copy(alpha = 0.3f))
-                                            .clickable(
-                                                interactionSource = remember { MutableInteractionSource() },
-                                                indication = null
-                                            ) { showFileTree = false }
-                                    )
                                 }
                             }
                         }
@@ -1880,6 +2263,112 @@ fun HomeScreen(
                             },
                             dismissButton = {
                                 TextButton(onClick = { showPasteDialog = false }) { Text("取消") }
+                            }
+                        )
+                    }
+
+                    if (showProjectList) {
+                        AlertDialog(
+                            onDismissRequest = { showProjectList = false },
+                            title = { Text("选择项目") },
+                            text = {
+                                LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
+                                    items(projects) { p ->
+                                        Card(
+                                            onClick = {
+                                                onSelectProject(p)
+                                                showProjectList = false
+                                                refreshTree()
+                                            },
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = if (p == currentProject)
+                                                    MaterialTheme.colorScheme.primaryContainer
+                                                else MaterialTheme.colorScheme.surfaceContainerHigh
+                                            )
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "📁 ${p.name}",
+                                                    modifier = Modifier.weight(1f),
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+                                                Text(
+                                                    text = java.text.SimpleDateFormat("MM-dd", java.util.Locale.getDefault()).format(java.util.Date(p.createdAt)),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(onClick = { showProjectList = false }) { Text("取消") }
+                            }
+                        )
+                    }
+
+                    if (showRunOutput) {
+                        AlertDialog(
+                            onDismissRequest = { showRunOutput = false },
+                            title = { Text(runOutputTitle) },
+                            text = {
+                                Box(modifier = Modifier.heightIn(max = 400.dp)) {
+                                    SelectionContainer {
+                                        Text(
+                                            text = runOutputText,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .verticalScroll(rememberScrollState())
+                                                .background(Color(0xFF191A1C))
+                                                .padding(12.dp)
+                                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(4.dp)),
+                                            color = Color(0xFFD4D4D4)
+                                        )
+                                    }
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(onClick = { showRunOutput = false }) { Text("关闭") }
+                            }
+                        )
+                    }
+
+                    if (showInstallPrompt) {
+                        AlertDialog(
+                            onDismissRequest = { showInstallPrompt = false },
+                            title = { Text("安装 $installLang 环境") },
+                            text = {
+                                Column {
+                                    Text("当前设备未检测到 $installLang 运行环境。")
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("是否安装 Termux 并在其中安装 $installPkgName 包？")
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        text = "步骤：\n1. 从 GitHub 下载 Termux (已自动打开页面)\n2. 安装后打开 Termux，运行：\n   pkg install $installPkgName\n3. 返回本应用再次点击 ▶ 运行",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    showInstallPrompt = false
+                                    try {
+                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
+                                        intent.data = android.net.Uri.parse("https://github.com/termux/termux-app/releases")
+                                        appContext.startActivity(intent)
+                                    } catch (_: Exception) {}
+                                }) { Text("去下载 Termux") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showInstallPrompt = false }) { Text("稍后") }
                             }
                         )
                     }
@@ -2033,6 +2522,46 @@ fun HomeScreen(
             )
         }
     }
+}
+
+private class SyntaxHighlightTransformation(private val ext: String) : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        return TransformedText(syntaxHighlight(text.text, ext), OffsetMapping.Identity)
+    }
+}
+
+private fun syntaxHighlight(code: String, ext: String): AnnotatedString = buildAnnotatedString {
+    val keywords = when (ext.lowercase()) {
+        "kt", "kts" -> setOf("val", "var", "fun", "class", "object", "if", "else", "when", "for", "while", "do", "return", "import", "package", "private", "public", "protected", "internal", "abstract", "interface", "enum", "data", "sealed", "open", "override", "init", "constructor", "super", "this", "null", "true", "false", "try", "catch", "finally", "throw", "in", "is", "as", "typealias", "companion", "inline", "suspend", "tailrec", "operator", "infix")
+        "java" -> setOf("public", "private", "protected", "class", "interface", "enum", "abstract", "final", "static", "void", "int", "long", "double", "float", "boolean", "char", "byte", "short", "String", "null", "true", "false", "if", "else", "for", "while", "do", "switch", "case", "break", "continue", "return", "new", "import", "package", "extends", "implements", "throws", "try", "catch", "finally", "throw", "super", "this", "synchronized", "volatile", "transient")
+        "py" -> setOf("def", "class", "if", "elif", "else", "for", "while", "break", "continue", "return", "import", "from", "as", "try", "except", "finally", "raise", "with", "yield", "lambda", "pass", "in", "not", "and", "or", "is", "None", "True", "False", "async", "await", "self", "global", "nonlocal", "del", "assert")
+        "js", "mjs", "ts" -> setOf("function", "const", "let", "var", "if", "else", "for", "while", "do", "return", "import", "export", "from", "as", "class", "extends", "new", "this", "null", "undefined", "true", "false", "try", "catch", "finally", "throw", "async", "await", "yield", "of", "in", "typeof", "instanceof", "switch", "case", "break", "continue", "default", "delete")
+        "html", "htm", "xml" -> emptySet()
+        "css" -> setOf("@import", "@media", "@keyframes", "@font-face", "!important")
+        "sh", "bash", "zsh" -> setOf("if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac", "function", "return", "exit", "export", "local", "source", "in")
+        else -> emptySet()
+    }
+    val comments = setOf("py", "sh", "bash", "zsh", "js", "mjs", "ts", "java", "kt", "kts")
+    val hasLineComments = ext.lowercase() in comments
+    val tokenRegex = Regex("""("[^"]*"|'[^']*'|[a-zA-Z_]\w*|\d+\.?\d*|//[^\n]*|#[^\n]*)""")
+    var lastEnd = 0
+    for (match in tokenRegex.findAll(code)) {
+        append(code.substring(lastEnd, match.range.first))
+        val token = match.value
+        val isString = (token.startsWith('"') || token.startsWith('\'')) && token.length > 1
+        val isComment = if (hasLineComments) token.startsWith("//") || token.startsWith("#") else token.startsWith("/*")
+        val isNumber = token.first().isDigit()
+        val isKeyword = token in keywords
+        when {
+            isComment -> withStyle(SpanStyle(color = Color(0xFF6A9955))) { append(token) }
+            isString -> withStyle(SpanStyle(color = Color(0xFFCE9178))) { append(token) }
+            isNumber -> withStyle(SpanStyle(color = Color(0xFFB5CEA8))) { append(token) }
+            isKeyword -> withStyle(SpanStyle(color = Color(0xFF569CD6))) { append(token) }
+            else -> append(token)
+        }
+        lastEnd = match.range.last + 1
+    }
+    append(code.substring(lastEnd))
 }
 
 private fun parseInlineMarkdown(text: String): AnnotatedString = buildAnnotatedString {
